@@ -135,6 +135,21 @@ us_housing_finance_full %>%
   geom_hline(yintercept = 1, lty = "dashed") +
   facet_wrap(~city)
 
+ggsave(paste("output/", Sys.Date(), " ", us_housing_variable, ".png", sep = ""))
+
+
+for (i in 3:length(colnames(us_housing_finance_full))) {
+
+  us_housing_finance_full %>% 
+    ggplot(aes(x = date, y = !!as.name(colnames(us_housing_finance_full)[i]))) +
+    geom_line() +
+    geom_hline(yintercept = 0, lty = "dashed") +
+    geom_hline(yintercept = 1, lty = "dashed") +
+    facet_wrap(~city)
+  
+  ggsave(paste("output/", Sys.Date(), " ", colnames(us_housing_finance_full)[i], ".png", sep = ""))
+  
+}
 
 # one city at a time
 us_housing_city <- "Boston"
@@ -154,6 +169,8 @@ us_housing_finance_full %>%
   facet_wrap(~city, scales = "free") +
   ggtitle("red is monthly mortgage, blue is monthly rent")
 
+ggsave(paste("output/", Sys.Date(), " ", "rent vs mortgage", ".png", sep = ""))
+#rent vs mortgage comparisons are also inherent in cash on cash yield (rent - mortgage) and dscr (rent/mortgage)
 
 ```
 
