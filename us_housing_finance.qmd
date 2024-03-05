@@ -1,0 +1,20 @@
+---
+title: "US housing finance"
+format: html
+editor: visual
+---
+
+```{r}
+library(tidyverse)
+```
+
+metrics to extract (by city):
+- median home price
+- mortgage rate (fixed)
+- LTV
+- median rents
+```{r}
+#median housing data from https://www.realtor.com/research/data/
+us_house_price <- read_csv("https://econdata.s3-us-west-2.amazonaws.com/Reports/Hotness/RDC_Inventory_Hotness_Metrics_Metro_History.csv")
+```
+
