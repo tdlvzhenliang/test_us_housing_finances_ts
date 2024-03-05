@@ -6,15 +6,162 @@ editor: visual
 
 ```{r}
 library(tidyverse)
+library(lubridate)
+library(datapasta)
 ```
 
 metrics to extract (by city):
-- median home price
+- median home price #need to geta better data source (because realtor.com has metro city data, not proper city data)
 - mortgage rate (fixed)
 - LTV
 - median rents
 ```{r}
 #median housing data from https://www.realtor.com/research/data/
 us_house_price <- read_csv("https://econdata.s3-us-west-2.amazonaws.com/Reports/Hotness/RDC_Inventory_Hotness_Metrics_Metro_History.csv")
+
+#import the python-generated files, as a list
+files = list.files(pattern = "csv")
+data = map(files, read_csv)
+us_mortgage_rate <- data[[1]]
+us_ltv <- data[[2]]
+
+#median housing rent data from zillow https://www.zillow.com/research/data/
+us_house_rent <- read_csv("https://files.zillowstatic.com/research/public_csvs/zori/Metro_zori_uc_sfr_sm_month.csv?t=1709631661")
+
 ```
+
+Tidy, clean, join the datasets (New York, Boston, Washington, Chicago, Los Angeles, San Francisco, Houston, Phoenix, Miami, Seattle)
+```{r}
+
+us_cities_1 <- c("New York-Newark-Jersey City", "Boston-Cambridge-Newton", "Washington-Arlington-Alexandria", "Chicago-Naperville-Elgin", "Los Angeles-Long Beach-Anaheim", "San Francisco-Oakland-Berkeley", "Houston-The Woodlands-Sugar Land", "Phoenix-Mesa-Chandler", "Miami-Fort Lauderdale-Pompano Beach", "Seattle-Tacoma-Bellevue")
+
+us_cities_2 <- c("New York", "Boston", "Washington", "Chicago", "Los Angeles", "San Francisco", "Houston", "Phoenix", "Miami", "Seattle")
+
+
+#housing price
+us_house_price_tidy <- us_house_price %>% 
+  mutate(date = ym(month_date_yyyymm)) %>% 
+  select(date, cbsa_title, median_listing_price) %>% 
+  separate(cbsa_title, into = c("city", "state"), sep = ",") %>% 
+  filter(city %in% us_cities_1) %>% 
+  select(-state) %>% 
+  separate(city, into = c("city", "discard1", "discard2"), sep = "-") %>% 
+  select(-discard1, -discard2)
+  #pull(city) %>% 
+  #unique() %>% 
+  #sort()
+
+#mortgage rate (and convert weekly to monthly)
+us_mortgage_rate_tidy <- us_mortgage_rate %>% 
+  rename(date = index,
+         mortgage_rate = values) %>% 
+  select(date, mortgage_rate)
+
+us_mortgage_rate_tidy_monthly <- us_mortgage_rate_tidy %>% 
+  mutate(year = year(date),
+         month = month(date)) %>% 
+  group_by(year, month) %>% 
+  summarize(mortgage_rate_avg = mean(mortgage_rate, na.rm = TRUE),
+            .groups = "drop") %>% 
+  mutate(date = paste(year, month, sep = "-") %>% ym()) %>% 
+  select(date, mortgage_rate_avg)
+
+
+#ltv
+us_ltv_tidy <- us_ltv %>% 
+  rename(date = index,
+         ltv = values) %>% 
+  select(date, ltv)
+
+#housing rent
+us_house_rent_tidy <- us_house_rent %>% 
+  separate(RegionName, into = c("city", "state"), sep = ",") %>% 
+  select(-RegionID, -SizeRank, -RegionType, -StateName, -state) %>% 
+  filter(city %in% us_cities_2) %>% 
+  pivot_longer(cols = -city) %>% 
+  mutate(name = ymd(name)) %>% 
+  rename(date = name,
+         monthly_rent = value) %>% 
+  mutate(year = year(date),
+         month = month(date),
+         date = paste(year, month, sep = "-") %>% ym()) %>% 
+  select(-year, -month)
+  #pull(city) %>% unique() %>% sort()
+  
+
+#join the datasets
+us_housing_finance <- us_house_price_tidy %>% 
+  arrange(date, city) %>% 
+  left_join(us_house_rent_tidy, by = c("date", "city")) %>% 
+  left_join(us_mortgage_rate_tidy_monthly, by = "date") %>% 
+  left_join(us_ltv_tidy, by = "date") %>% 
+  fill(ltv, .direction = "down") %>% 
+  na.omit()
+
+
+```
+
+Calculate new columns / variables
+```{r}
+library(jrvFinance) #see https://github.com/jrvarma/jrvFinance
+#test
+annuity.instalment(0.10, 10, pv = 100)
+
+us_housing_finance %>% 
+  mutate(down_payment = median_listing_price*(1 - ltv/100),
+         mortgage_monthly = annuity.instalment(mortgage_rate_avg/12, 360, pv = -median_listing_price*ltv/100)) #error
+
+us_housing_finance_full <- us_housing_finance %>% 
+  mutate(down_payment = median_listing_price*(1 - ltv/100),
+         mortgage_monthly = (median_listing_price*ltv/100)*(mortgage_rate_avg/12/100)*(1 + mortgage_rate_avg/12/100)^360 / 
+           (((1 + mortgage_rate_avg/12/100) ^ 360) - 1),
+         rental_yield = monthly_rent*12/median_listing_price*100,
+         cash_on_cash_yield = (monthly_rent-mortgage_monthly)*12/down_payment,
+         dscr = monthly_rent/mortgage_monthly)
+
+
+```
+
+Plot the data
+```{r}
+
+# variable by city
+us_housing_variable <- "dscr"
+
+us_housing_finance_full %>% 
+  ggplot(aes(x = date, y = !!as.name(us_housing_variable))) +
+  geom_line() +
+  geom_hline(yintercept = 0, lty = "dashed") +
+  geom_hline(yintercept = 1, lty = "dashed") +
+  facet_wrap(~city)
+
+
+# one city at a time
+us_housing_city <- "Boston"
+
+us_housing_finance_full %>% 
+  filter(city == as.name(us_housing_city)) %>% 
+  ggplot(aes(x = date, y = mortgage_monthly)) +
+  geom_line() +
+  geom_line(aes(y = monthly_rent))
+
+
+#monthly rent and mortgage by city
+us_housing_finance_full %>% 
+  ggplot(aes(x = date, y = mortgage_monthly)) +
+  geom_line(color = "red") +
+  geom_line(aes(y = monthly_rent), color = "blue") +
+  facet_wrap(~city, scales = "free") +
+  ggtitle("red is monthly mortgage, blue is monthly rent")
+
+
+```
+
+create a dashboard
+
+```{r}
+
+```
+
+
 
