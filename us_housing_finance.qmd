@@ -10,11 +10,8 @@ library(lubridate)
 library(datapasta)
 ```
 
-metrics to extract (by city):
-- median home price #need to geta better data source (because realtor.com has metro city data, not proper city data)
-- mortgage rate (fixed)
-- LTV
-- median rents
+metrics to extract (by city): - median home price #need to geta better data source (because realtor.com has metro city data, not proper city data) - mortgage rate (fixed) - LTV - median rents
+
 ```{r}
 #median housing data from https://www.realtor.com/research/data/
 us_house_price <- read_csv("https://econdata.s3-us-west-2.amazonaws.com/Reports/Hotness/RDC_Inventory_Hotness_Metrics_Metro_History.csv")
@@ -31,6 +28,7 @@ us_house_rent <- read_csv("https://files.zillowstatic.com/research/public_csvs/z
 ```
 
 Tidy, clean, join the datasets (New York, Boston, Washington, Chicago, Los Angeles, San Francisco, Houston, Phoenix, Miami, Seattle)
+
 ```{r}
 
 us_cities_1 <- c("New York-Newark-Jersey City", "Boston-Cambridge-Newton", "Washington-Arlington-Alexandria", "Chicago-Naperville-Elgin", "Los Angeles-Long Beach-Anaheim", "San Francisco-Oakland-Berkeley", "Houston-The Woodlands-Sugar Land", "Phoenix-Mesa-Chandler", "Miami-Fort Lauderdale-Pompano Beach", "Seattle-Tacoma-Bellevue")
@@ -102,15 +100,22 @@ us_housing_finance <- us_house_price_tidy %>%
 ```
 
 Calculate new columns / variables
+
 ```{r}
 library(jrvFinance) #see https://github.com/jrvarma/jrvFinance
 #test
 annuity.instalment(0.10, 10, pv = 100)
 
+#method 1 (using package above but did not use) (use pmap list; see https://www.r-bloggers.com/2023/03/simple-examples-of-pmap-from-purrr/)
 us_housing_finance %>% 
   mutate(down_payment = median_listing_price*(1 - ltv/100),
-         mortgage_monthly = annuity.instalment(mortgage_rate_avg/12, 360, pv = -median_listing_price*ltv/100)) #error
+         #mortgage_monthly = annuity.instalment(mortgage_rate_avg/12, 360, pv = -median_listing_price*ltv/100), #error
+         mortgage_monthly = pmap(list(mortgage_rate_avg, median_listing_price, ltv), function(a, b, c) {
+           -annuity.instalment(a/12/100, 30*12, pv = -b*c/100)
+         })) %>% 
+  unnest(mortgage_monthly)
 
+#method 2 (using full calc and used this)
 us_housing_finance_full <- us_housing_finance %>% 
   mutate(down_payment = median_listing_price*(1 - ltv/100),
          mortgage_monthly = (median_listing_price*ltv/100)*(mortgage_rate_avg/12/100)*(1 + mortgage_rate_avg/12/100)^360 / 
@@ -119,10 +124,23 @@ us_housing_finance_full <- us_housing_finance %>%
          cash_on_cash_yield = (monthly_rent-mortgage_monthly)*12/down_payment,
          dscr = monthly_rent/mortgage_monthly)
 
+#comparison test check of method 1 and method 2
+data.frame(
+  "method_1" = us_housing_finance %>% 
+  mutate(down_payment = median_listing_price*(1 - ltv/100),
+         #mortgage_monthly = annuity.instalment(mortgage_rate_avg/12, 360, pv = -median_listing_price*ltv/100), #error
+         mortgage_monthly = pmap(list(mortgage_rate_avg, median_listing_price, ltv), function(a, b, c) {
+           -annuity.instalment(a/12/100, 30*12, pv = -b*c/100)
+         })) %>% 
+  unnest(mortgage_monthly) %>% pull(mortgage_monthly),
+  "method_2" = us_housing_finance_full %>% pull(mortgage_monthly)
+) %>% 
+  mutate(check = round(method_1 - method_2, 10)) %>% View()
 
 ```
 
 Plot the data
+
 ```{r}
 
 # variable by city
@@ -179,6 +197,3 @@ create a dashboard
 ```{r}
 
 ```
-
-
-
